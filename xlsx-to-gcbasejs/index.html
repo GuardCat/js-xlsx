@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<!-- xlsx.js (C) 2013-present  SheetJS http://sheetjs.com -->
+<!-- vim: set ts=2: -->
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>SheetJS Live Demo</title>
+<style>
+#drop{
+	border:2px dashed #bbb;
+	-moz-border-radius:5px;
+	-webkit-border-radius:5px;
+	border-radius:5px;
+	padding:25px;
+	text-align:center;
+	font:20pt bold,"Vollkorn";color:#bbb
+}
+#b64data{
+	width:100%;
+}
+a { text-decoration: none }
+</style>
+</head>
+<body>
+<pre>
+<b><a href="http://sheetjs.com">SheetJS Data Preview Live Demo</a></b>
+(Base64 text works back to IE6; drag and drop works back to IE10)
+
+<a href="https://github.com/SheetJS/js-xlsx">Source Code Repo</a>
+<a href="https://github.com/SheetJS/js-xlsx/issues">Issues?  Something look weird?  Click here and report an issue</a>
+Output Format: <select name="format" onchange="setfmt()">
+<option value="csv"> CSV</option>
+<option value="json" selected> JSON</option>
+<option value="form"> FORMULAE</option>
+<option value="html"> HTML</option>
+</select><br />
+<div id="drop">Drop a spreadsheet file here to see sheet data</div>
+<input type="file" name="xlfile" id="xlf" /> ... or click here to select a file
+
+<textarea id="b64data">... or paste a base64-encoding here</textarea>
+<input type="button" id="dotext" value="Click here to process the base64 text" onclick="b64it();"/><br />
+<b>Advanced Demo Options:</b>
+Use Web Workers: (when available) <input type="checkbox" name="useworker">
+Use readAsBinaryString: (when available) <input type="checkbox" name="userabs" checked>
+</pre>
+<pre id="out"></pre>
+<div id="htmlout"></div>
+<br />
+<!-- uncomment the next line here and in xlsxworker.js for encoding support -->
+<script src="js/cpexcel.js"></script>
+<script src="js/shim.js"></script>
+<script src="js/jszip.js"></script>
+<script src="js/xlsx.js"></script>
+<script>
+/*jshint browser:true */
+/* eslint-env browser */
+/*global Uint8Array, console */
+/*global XLSX */
+/* exported b64it, setfmt */
+/* eslint no-use-before-define:0 */
+var X = XLSX;
+var XW = {
+	/* worker message */
+	msg: 'xlsx',
+	/* worker scripts */
+	worker: './xlsxworker.js'
+};
+
+var global_wb;
+
+var process_wb = (function() {
+	var OUT = document.getElementById('out');
+	var HTMLOUT = document.getElementById('htmlout');
+
+	var get_format = (function() {
+		var radios = document.getElementsByName( "format" );
+		return function() {
+			for(var i = 0; i < radios.length; ++i) if(radios[i].checked || radios.length === 1) return radios[i].value;
+		};
+	})();
+/*modified*/
+	var to_json = function to_json(workbook) {
+		var result = {};
+		workbook.SheetNames.forEach(function(sheetName) {
+			var roa = X.utils.sheet_to_json(workbook.Sheets[sheetName], {header:1});
+			if(roa.length) result[sheetName] = roa;
+		});
+		return result
+	};
+
+	var to_csv = function to_csv(workbook) {
+		var result = [];
+		workbook.SheetNames.forEach(function(sheetName) {
+			var csv = X.utils.sheet_to_csv(workbook.Sheets[sheetName]);
+			if(csv.length){
+				result.push("SHEET: " + sheetName);
+				result.push("");
+				result.push(csv);
+			}
+		});
+		return result.join("\n");
+	};
+
+	var to_fmla = function to_fmla(workbook) {
+		var result = [];
+		workbook.SheetNames.forEach(function(sheetName) {
+			var formulae = X.utils.get_formulae(workbook.Sheets[sheetName]);
+			if(formulae.length){
+				result.push("SHEET: " + sheetName);
+				result.push("");
+				result.push(formulae.join("\n"));
+			}
+		});
+		return result.join("\n");
+	};
+
+	var to_html = function to_html(workbook) {
+		HTMLOUT.innerHTML = "";
+		workbook.SheetNames.forEach(function(sheetName) {
+			var htmlstr = X.write(workbook, {sheet:sheetName, type:'string', bookType:'html'});
+			HTMLOUT.innerHTML += htmlstr;
+		});
+		return "";
+	};
+
+	return function process_wb(wb) {
+		global_wb = wb;
+		var output = "";
+		switch(get_format()) {
+			case "form": output = to_fmla(wb); break;
+			case "html": output = to_html(wb); break;
+			case "json": output = to_json(wb); break;
+			default: output = to_csv(wb);
+		}
+		/*if(OUT.innerText === undefined) OUT.textContent = output;
+		else OUT.innerText = output;
+		if(typeof console !== 'undefined') console.log("output", new Date());*/
+		/*modified*/
+		//window.SHARE = output;
+		toGCBase(output);
+	};
+})();
+
+var setfmt = window.setfmt = function setfmt() { if(global_wb) process_wb(global_wb); };
+
+var b64it = window.b64it = (function() {
+	var tarea = document.getElementById('b64data');
+	return function b64it() {
+		if(typeof console !== 'undefined') console.log("onload", new Date());
+		var wb = X.read(tarea.value, {type:'base64', WTF:false});
+		process_wb(wb);
+	};
+})();
+
+var do_file = (function() {
+	var rABS = typeof FileReader !== "undefined" && (FileReader.prototype||{}).readAsBinaryString;
+	var domrabs = document.getElementsByName("userabs")[0];
+	if(!rABS) domrabs.disabled = !(domrabs.checked = false);
+
+	var use_worker = typeof Worker !== 'undefined';
+	var domwork = document.getElementsByName("useworker")[0];
+	if(!use_worker) domwork.disabled = !(domwork.checked = false);
+
+	var xw = function xw(data, cb) {
+		var worker = new Worker(XW.worker);
+		worker.onmessage = function(e) {
+			switch(e.data.t) {
+				case 'ready': break;
+				case 'e': console.error(e.data.d); break;
+				case XW.msg: cb(JSON.parse(e.data.d)); break;
+			}
+		};
+		worker.postMessage({d:data,b:rABS?'binary':'array'});
+	};
+
+	return function do_file(files) {
+		rABS = domrabs.checked;
+		use_worker = domwork.checked;
+		var f = files[0];
+		var reader = new FileReader();
+		reader.onload = function(e) {
+			if(typeof console !== 'undefined') console.log("onload", new Date(), rABS, use_worker);
+			var data = e.target.result;
+			if(!rABS) data = new Uint8Array(data);
+			if(use_worker) xw(data, process_wb);
+			else process_wb(X.read(data, {type: rABS ? 'binary' : 'array'}));
+		};
+		if(rABS) reader.readAsBinaryString(f);
+		else reader.readAsArrayBuffer(f);
+	};
+})();
+
+(function() {
+	var drop = document.getElementById('drop');
+	if(!drop.addEventListener) return;
+
+	function handleDrop(e) {
+		e.stopPropagation();
+		e.preventDefault();
+		do_file(e.dataTransfer.files);
+	}
+
+	function handleDragover(e) {
+		e.stopPropagation();
+		e.preventDefault();
+		e.dataTransfer.dropEffect = 'copy';
+	}
+
+	drop.addEventListener('dragenter', handleDragover, false);
+	drop.addEventListener('dragover', handleDragover, false);
+	drop.addEventListener('drop', handleDrop, false);
+})();
+
+(function() {
+	var xlf = document.getElementById('xlf');
+	if(!xlf.addEventListener) return;
+	function handleFile(e) { do_file(e.target.files); }
+	xlf.addEventListener('change', handleFile, false);
+})();
+	var _gaq = _gaq || [];
+	_gaq.push(['_setAccount', 'UA-36810333-1']);
+	_gaq.push(['_trackPageview']);
+
+	(function() {
+		var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+		ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+		var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+	})( );
+
+/**
+ * База данных
+ * @constructor
+ * @require class: GCTable
+ */
+class GCBase {
+	constructor(income) {
+		if (!income) throw new Error("GCBase constructor error: no incoming parameters");
+		this.cachedTables = {};
+		if ( (typeof income) === "string" ) {
+
+			if (income.length <= 30) {
+				this.load(income);
+			} else {
+				this.reparse(income);			
+			}
+		
+		/* Если передан объект, проверяем, это заголовок новой БД или БД целиком */
+		} else if (typeof income === "object") {
+			
+			if (GCBase.checkDBData(income)) {
+				this.__data = Object.assign({}, income);
+                this.__tables = {};
+			} else if (GCBase.checkDB(income)) {
+				this.__data = Object.assign({}, income.__data);
+				this.__tables = Object.assign({}, income.__tables);
+			} else {
+				throw new Error("GCBase constructor error: wrong database");
+			}	
+
+		} else {
+			throw new Error("GCBase constructor error: wrong incoming parameter");
+		}
+	}
+	
+	get tables( ) {
+		return Object.keys(this.__tables);
+	}
+	
+	stringify (withCache = false){ 
+		return withCache ?
+			GCBase.__export.bind(this)( )
+			: GCBase.__export.bind(this)("cachedTables")
+		; 
+	}
+	
+	stringifyCache() {
+		return GCBase.__export.bind(this.cachedTables);
+	}
+	
+	reparse(text) {
+		let obj = JSON.parse(text);
+		Object.assign(this, obj);
+	}
+	
+	save(withCache = true) {
+		localStorage.setItem( `GCBase:${this.__data.name}`, this.stringify(withCache) );
+	}
+	
+	load(name) {
+		name = name || this.__data.name;
+		let data = localStorage.getItem(`GCBase:${name}`);
+		
+		if (!data) throw new Error(`GCBase load: database ${name} doesn't exists in localStorage.`);
+		this.reparse(data);
+		if (Object.keys(this.cachedTables).length === 0) this.recache();
+	}
+	
+	/* Добавляем таблицу в экземпляр БД */
+	addTable(name, captions) {
+		if (!name) throw new Error("GCBase addTable: wrong name");
+		if (!GCBase.checkCaptions(captions)) throw new Error("GCBase addTable: wrong captions");
+		name = name.toString( );
+		if (this.hasTable(name)) throw new Error("GCBase addTable: table alredy exists");
+
+		this.__tables[name] = {};
+		this.__tables[name].__captions = this.loadCaptions(captions);
+		this.__tables[name].__rows = [ ];	
+	}
+	
+	table(name, recache = false) {
+		if (!this.hasTable(name)) throw new Error(`GCBase get table: table doesnt exist: ${name}.`);
+		return new GCTable(name, this, recache);
+	}
+	
+	/* Прогоняет заголовки через проверку и дополнение, копирует их в новый объект.*/
+	loadCaptions(captions) {
+		let result = {}, key;
+		for (key in captions) {
+			result[key] = Object.assign({}, GCBase.checkAndFixCaption(captions[key], this));
+		}
+		return result;
+	}
+	
+	hasTable(tableName) {
+		return tableName in this.__tables;
+	}
+	
+	hasColumn(tableName, columnName) {
+		return this.hasTable(tableName) && columnName in this.__tables[tableName].__captions;
+	}
+	
+	get about() {
+		let obj = {};
+		obj.toString = ( ( ) => `${this.__data.name} v${this.__data.version}: ${this.__data.description}` ).bind(this);
+		return Object.assign(obj, this.__data);
+	}
+
+	recache() {
+		let length = Object.keys(this.__tables).length, key, errors = 0;
+
+		while(length) {
+			for(key in this.__tables) {
+				try {
+					this.table(key).recache();
+					length--;
+				} catch(err) {
+					window.console.log(key, err);
+					errors++;
+					if (errors > Object.keys(this.__tables)) throw new Error("GCBase recache: unknown error");
+					continue;
+				}
+			}
+		}
+	}
+	
+	/*
+     * Проверяет заголовок таблицы (один конкретный столбец)
+     * @param {object} caption — заголовок одного столбца
+     * @return {object} дополненная копия заголовка
+     * @throws отсутствие обязательных полей, не проставляемых автоматически, некорректный формат, неизвестный формат
+     */
+	static checkAndFixCaption(caption, base) {
+		if( !(caption && caption instanceof Object && caption.type) ) throw new Error("GCBase addTable: wrong captions");
+		let result = Object.assign({}, caption);
+
+		switch (result.type) {
+			case "text":
+				result.format = "string";
+				break;
+
+			case "auto":
+				result.format = "integer";
+				result.unique = true;
+				result.next = 0;
+				break;
+
+			case "link":
+				if ( !("data" in result && "to" in result && "table" in result) ) throw new Error("GCBase addTable: wrong link caption");
+				if ( result.multiply !== true && result.data.some ) throw new Error("GCBase addTable: multiply is false, but there is several keys in the caption.data");
+				if ( !base.hasColumn(result.table, result.to) ) throw new Error(`GCBase addTable: wrong link, table or column doesn't exists (${result.table}:${result.to})`);
+				break;
+
+			case "date":
+				if ( !(result.format && result.format instanceof Object && result.language && !(result.unique)) ) throw new Error("GCBase addTable: wrong date format");				
+				break;
+
+			case "rowdate":		
+				break;
+				
+			case "flag":
+				if (result.unique) throw new Error("GCBase addTable: flag can't contain unique: true");
+				result.format = "boolean";
+				break;
+				
+			case "number":
+				result.format = result.format || "integer";
+				if ( !["integer", "float", "precision"].some((el) => el === result.format) )  throw new Error(`GCBase addTable: number has unknown format: ${result.format}`);
+				if (result.format === "precision") {
+					result.precision = parseInt(result.precision);
+					if(isNaN(result.precision)) throw new Error(`GCBase addTable: precision number needs quantity of numbers after comma in precision as Integer. Recieved: ${result.format}`);
+				} 
+				break;
+
+			default:
+				throw new Error(`GCBase addTable: unknown caption type: ${result.type}`);
+		}
+		return result;
+	}
+
+	
+	/*
+		Проверяет объект на соответствие формату __data
+	*/
+	static checkDBData(data) {
+		if ( !(data && data.name && data.version && data.description) ) return false;
+		if ( typeof data.version !== "number" ) return false;
+		return true;
+	}
+
+	/*
+		Проверяет экземпляр базы на соответствие формату
+	*/
+	static checkDB(data) {
+		if ( !(data && data.__data && data.__tables) ) return false;
+		return true;
+	}
+	
+	/*
+		Проверяет объект на соответствие формату __captions
+		в данной версии — заглушка.
+	*/
+	static checkCaptions(captions) {
+		if ( !(captions instanceof Object) ) return false;
+		return true;
+	}
+	
+	static __export(exclude) {
+		return JSON.stringify(this, (key, val) => key === exclude ? undefined : val);
+	}
+}
+
+class GCTable {
+	constructor(name, base, recache) {
+		this.__rows = base.__tables[name].__rows;
+
+		this.captions = Object.assign({}, base.__tables[name].__captions);
+		this.base = base;
+		this.name = name;
+
+		
+		if ( !(name in base.cachedTables) || recache ) {
+			base.cachedTables[name] = this.__fixRow(this.__rows);
+		}
+		this.rows = base.cachedTables[name];
+		
+		/* тюнинг rows, минимальная защита от шаловливых рук*/
+		this.rows.add = this.__addRow.bind(this);
+		this.rows.__push = this.rows.push; /* для внутреннего использования*/
+		this.rows.splice = this.rows.shift = this.rows.push = this.rows.unshift = this.rows.pop = undefined;
+
+	}
+	
+
+	stringify() { return GCBase.__export.bind(this.rows)(); }
+	recache () { return this.base.table(this.name, true); }
+	
+	__fixRow(row) {
+		if (row instanceof Array) { return row.map( this.__fixRow.bind(this) );} /*Если массив, обрабатываем каждую строку*/
+		let column, fixedRow = { }, caption, parsedDate;
+		for (column in row) {
+			caption = this.captions[column];
+			switch (caption.type) {
+				case "link":
+					fixedRow[column] = {source: row[column], value: this.__valFromLink(caption, row[column], this.base.__tables[caption.table].__captions[caption.to], this.base.cachedTables[caption.table])};
+					break;				
+				case "date":
+					parsedDate = row[column] instanceof Date ? row[column] : new Date(row[column]);
+					if ( isNaN(parsedDate.getDay( )) ) throw new Error(`GCTable addRow: recieved wrong date: ${row[column]}`);
+					if ( (caption.format && !caption.language) || (!caption.format && caption.language) ) throw new Error(`GCTable addRow: if you add format or language to date, you must use BOTH of the parameters.`);
+					if ( !(caption.format instanceof Object) ) throw new Error(`GCTable addRow: date format can be only object. Recieved: ${caption.format}`);
+					
+					fixedRow[column]= caption.format ? 
+						{source: parsedDate, value: parsedDate.toLocaleDateString(caption.language, caption.format)}
+						: parsedDate
+					; 
+					break;
+				case "number":
+					switch (caption.format) {
+						case "integer":
+							fixedRow[column] = parseInt(row[column]);
+							break;
+						case "float":
+							fixedRow[column] = parseFloat(row[column]);
+							break;
+						case "precision":
+							fixedRow[column] = +( (+row[column]).toFixed(caption.precision) );
+							break;
+					}
+					if ( isNaN(fixedRow[column]) ) throw new Error(`GCTable addRow: wrong number: ${fixedRow[column]}`);
+					break;
+				default:
+					fixedRow[column] = row[column];
+			}
+		}
+		return fixedRow;
+	}
+	
+	__addRow(row) {
+		if ("some" in row && "map" in row) return row.map(this.rows.add); /*Если массив, обрабатываем каждую строку*/
+
+		for (let column in row) if ( !(column in this.captions) ) throw new Error (`GCTable adding row: Unknown key in row: ${column}`);
+
+		for (let column in this.captions) { /* Обновляем заголовок для автоматического поля */
+			if(this.captions[column].type === "auto") {
+				row[column] = this.captions[column].next;
+				this.base.__tables[this.name].__captions[column].next++;
+			}
+		}
+		
+		if (Object.keys(row).length !== Object.keys(this.captions).length) throw new Error (`GCTable adding row: The number of key in row and in captions doesn't match`);
+		
+		this.__rows.push(row);
+
+		this.base.cachedTables[this.name].__push( this.__fixRow(row) );
+		return this;
+	}
+	
+    
+	/* Получает значение по ссылке. Важно: на вход подаётся обработанный массив строк целевой таблицы! */
+	__valFromLink(caption, key, targetCaption, targetTableRows) {
+		let result = [ ], 
+			rows = targetTableRows.filter( (row) => {
+				return caption.multiply ? key.some( (keyVariant) => keyVariant === row[caption.to] ) : key === row[caption.to];
+			} )
+		;
+		
+		if (caption.data !== ":all") {
+			rows.forEach( (row) => {
+				let resultRow = {};
+
+				if ("some" in caption.data) {
+					caption.data.forEach( (k) => {
+						resultRow[k] = row[k];
+					} );
+					result.push(resultRow);
+				} else {
+					result.push(row[caption.to]);
+				}
+			} );
+		} else {
+			result = rows;
+		}
+		return targetCaption.uniq === true ? result[0] : result;	
+	}
+	
+}
+
+function makeCaptions(cols) {
+	let result = {  };
+	
+	cols.forEach( el => {
+		let  links, types, name;
+		links = el.split(":");
+		types = el.split("#");
+		
+		if (links.length > 1 && types.length > 1) throw new Error("Ошибка в заголовках. Не может быть указано одновременно «:» и «#».")
+		
+		if(el.slice(-1) === ";") {
+			name = el.slice(0, -1);
+			result[name].multiply = true
+			result[name].type = "link"
+			result[name].table = el
+			result[name].to = links[1];
+		} else {
+			if (links.length > 1) {
+				name = links[0];
+				
+			}
+		
+		};
+		
+	
+	} );
+
+function toGCBase(json) {
+	let 
+		result = [ ],
+		base = new GCBase({name: "ProductsBase", version: 1, description: "Автоматически сгенерированная из Excel-таблицы База продуктов для ProductPlayer."}),
+		tableKey, rowKey, table
+	;
+	
+	for(tableKey in json) {
+		table = {};
+		table.__captions = makeCaptions(json[0]);
+		json[tableKey].forEach( (el, num) => {
+			
+		} );
+	}
+	/*json.forEach( el => {
+		console.log(el);
+	} );*/
+	
+}
+
+function saveFile(content, settings={name:"untitled.json", type: "text/json", charset: "utf=8"}) {
+		let link = document.createElement("a");
+		link.style.display="none";
+		link.setAttribute("download", settings.name)
+		link.setAttribute("href", `data:${settings.type};charset=${settings.charset},${encodeURI(content)}`);
+		document.body.appendChild(link);
+		link.click();
+}
+	
+</script>
+</body>
+</html>
