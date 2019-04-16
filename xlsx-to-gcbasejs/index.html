@@ -341,14 +341,15 @@ class GCBase {
 		while(length) {
 			for(key in this.__tables) {
 				try {
-					this.table(key).recache();
+					this.table(key).recache( );
 					length--;
 				} catch(err) {
-					window.console.log(key, err);
+					//window.console.error(key, err, errors);
 					errors++;
-					if (errors > Object.keys(this.__tables)) throw new Error("GCBase recache: unknown error");
+					console.info(this.__tables);
 					continue;
 				}
+				if (errors >= Object.keys(this.__tables)) {console.error(this.__tables[key], key); throw new Error("GCBase recache: unknown error");}
 			}
 		}
 	}
@@ -471,6 +472,7 @@ class GCTable {
 			caption = this.captions[column];
 			switch (caption.type) {
 				case "link":
+					if(!this.base.__tables[caption.table]) throw new Error(`GCTable fix row: wrong link: "${caption.to}"`);
 					fixedRow[column] = {source: row[column], value: this.__valFromLink(caption, row[column], this.base.__tables[caption.table].__captions[caption.to], this.base.cachedTables[caption.table])};
 					break;				
 				case "date":
@@ -524,7 +526,6 @@ class GCTable {
 		this.base.cachedTables[this.name].__push( this.__fixRow(row) );
 		return this;
 	}
-	
     
 	/* Получает значение по ссылке. Важно: на вход подаётся обработанный массив строк целевой таблицы! */
 	__valFromLink(caption, key, targetCaption, targetTableRows) {
@@ -555,10 +556,11 @@ class GCTable {
 	
 }
 
-function makeCaptions(cols) {
-	let result = {  };
+function makeTable(table, tableName) {
+	let result = { __captions: {}, __rows: [ ] };
+	result.__captions = { };
 	
-	cols.forEach( el => {
+	table[0].forEach( (el, col) => {
 		let  links, types, name;
 		links = el.split(":");
 		types = el.split("#");
@@ -566,39 +568,82 @@ function makeCaptions(cols) {
 		if (links.length > 1 && types.length > 1) throw new Error("Ошибка в заголовках. Не может быть указано одновременно «:» и «#».")
 		
 		if(el.slice(-1) === ";") {
-			name = el.slice(0, -1);
-			result[name].multiply = true
-			result[name].type = "link"
-			result[name].table = el
-			result[name].to = links[1];
+			name = links[0];
+			result.__captions[name] = { };
+			
+			result.__captions[name].multiply = true
+			result.__captions[name].type = "link"
+			result.__captions[name].table = name
+			result.__captions[name].to = links[1].slice(0, -1); /* Убираем финальную точку с запятой */
+			result.__captions[name].data = ":all";
 		} else {
+		
 			if (links.length > 1) {
 				name = links[0];
+				result.__captions[name] = { };
+				
+				result.__captions[name].type = "link";
+				result.__captions[name].table = name;
+				result.__captions[name].to = links[1];
+				result.__captions[name].multiply = false;
+				result.__captions[name].data = ":all";
+			} else {
+				
+				if (types.length > 1) {
+					name = types[0];
+					result.__captions[name] = { };
+					
+					result.__captions[name].type = types[1];
+					if (result.__captions[name].type === "number")	result.__captions[name].format = types[2] || "float";
+				} else {
+					name = el;
+					result.__captions[name] = { };
+					
+					result.__captions[name].type = "text";
+					result.__captions[name].unique = false;
+				}
 				
 			}
 		
-		};
+		}
 		
-	
+		table.forEach( (el, row) => {
+			if (row === 0) return false;
+			let elements = (table[row][col] && table[row][col].split) ? table[row][col].split(";") : [];
+			if ( !result.__rows[row - 1]) result.__rows[row - 1] = { }; /* -1 так как удалена первая строка (заголовки) */
+			result.__rows[row - 1][name] = (elements && elements.length > 1) ? elements : table[row][col];		
+		} );
+		
 	} );
+	
+	if ( !("id" in result.__captions) ) result.__captions.id = {type: "auto"};
+	return result;
+}
 
 function toGCBase(json) {
 	let 
-		result = [ ],
-		base = new GCBase({name: "ProductsBase", version: 1, description: "Автоматически сгенерированная из Excel-таблицы База продуктов для ProductPlayer."}),
-		tableKey, rowKey, table
+		result = {
+			__tables: { 
+				
+			} 
+		},
+		desc = ({name: "ProductsBase", version: 1, description: "Автоматически сгенерированная из Excel-таблицы База продуктов для ProductPlayer."}),
+		tableKey, rowKey, table, row, cell
 	;
-	
+
+	console.log(json);
 	for(tableKey in json) {
 		table = {};
-		table.__captions = makeCaptions(json[0]);
-		json[tableKey].forEach( (el, num) => {
-			
-		} );
+		table = makeTable(json[tableKey], tableKey);
+		result.__tables[tableKey] = { __captions: { }, __rows: [ ] }
+		
+		Object.assign( result.__tables[tableKey].__captions, table.__captions );
+		Object.assign( result.__tables[tableKey].__rows, table.__rows );
 	}
-	/*json.forEach( el => {
-		console.log(el);
-	} );*/
+	
+	result.__data = desc;
+	
+	window.SHARED = new GCBase(result);
 	
 }
 
